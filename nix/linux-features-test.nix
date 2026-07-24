@@ -13,6 +13,7 @@ let
   testFeatureIds = [
     "persistent-status-panel"
     "appshots"
+    "codex-micro"
     "codex-wrapper-updater"
     "directory-only-working-tree-watch"
     "frameless-titlebar"
@@ -24,9 +25,11 @@ let
     "remote-control-ui"
     "ui-tweaks"
     "appshots"
+    "codex-micro"
   ];
   normalizedTestFeatureIds = [
     "appshots"
+    "codex-micro"
     "codex-wrapper-updater"
     "directory-only-working-tree-watch"
     "frameless-titlebar"
@@ -42,6 +45,7 @@ let
   watchdogFeatureIds = (builtins.fromJSON (builtins.readFile ../scripts/ci/watchdog-linux-features.json)).enabled;
   normalizedWatchdogFeatureIds = [
     "appshots"
+    "codex-micro"
     "codex-wrapper-updater"
     "directory-only-working-tree-watch"
     "frameless-titlebar"
@@ -129,6 +133,14 @@ let
     builtins.head (evalNixOS moduleConfig).config.environment.systemPackages;
 
   defaultConfig = { enable = true; };
+  codexMicroConfig = {
+    enable = true;
+    linuxFeatures = [ "codex-micro" ];
+  };
+  disabledCodexMicroConfig = {
+    enable = false;
+    linuxFeatures = [ "codex-micro" ];
+  };
   legacyRemoteConfig = {
     enable = true;
     remoteMobileControl.enable = true;
@@ -144,11 +156,15 @@ let
     enableComputerUseUi = true;
     linuxFeatureIds = normalizedTestFeatureIds;
   };
+  expectedCodexMicro = packages.codex-desktop.override {
+    linuxFeatureIds = [ "codex-micro" ];
+  };
   reorderedCombined = packages.codex-desktop.override {
     enableComputerUseUi = true;
     linuxFeatureIds = [
       "remote-mobile-control"
       "frameless-titlebar"
+      "codex-micro"
       "codex-wrapper-updater"
       "directory-only-working-tree-watch"
       "global-dictation"
@@ -160,8 +176,12 @@ let
       "ui-tweaks"
       "appshots"
       "appshots"
+      "codex-micro"
     ];
   };
+
+  homeDisabledCodexMicro = evalHomeManager disabledCodexMicroConfig;
+  nixosDisabledCodexMicro = evalNixOS disabledCodexMicroConfig;
 
   customPackage = pkgs.runCommand "codex-desktop-custom-test-package" { } ''
     mkdir -p "$out"
@@ -290,6 +310,15 @@ let
   ) contextEnvironmentFiles;
 in
 assert lib.assertMsg
+  (lib.elem "codex-micro" linuxFeatures.supportedFeatureIds)
+  "codex-micro is missing from the Nix-supported feature list";
+assert lib.assertMsg
+  (linuxFeatures.normalize [ "codex-micro" "appshots" "codex-micro" ] == [
+    "appshots"
+    "codex-micro"
+  ])
+  "codex-micro was not accepted, sorted, and deduplicated";
+assert lib.assertMsg
   (linuxFeatures.normalize testFeatureIds == normalizedTestFeatureIds)
   "Nix Linux feature IDs must be sorted and deduplicated";
 assert lib.assertMsg
@@ -301,6 +330,21 @@ assert lib.assertMsg
 assert lib.assertMsg
   ((nixosPackage defaultConfig).drvPath == packages.codex-desktop.drvPath)
   "the NixOS default package changed";
+assert lib.assertMsg
+  ((homePackage codexMicroConfig).drvPath == expectedCodexMicro.drvPath)
+  "Home Manager did not select the codex-micro package";
+assert lib.assertMsg
+  ((nixosPackage codexMicroConfig).drvPath == expectedCodexMicro.drvPath)
+  "NixOS did not select the codex-micro package";
+assert lib.assertMsg
+  (expectedCodexMicro.drvPath != packages.codex-desktop.drvPath)
+  "enabling codex-micro did not change the selected package";
+assert lib.assertMsg
+  (homeDisabledCodexMicro.config.home.packages == [ ])
+  "disabled Home Manager unexpectedly selected the codex-micro package";
+assert lib.assertMsg
+  (nixosDisabledCodexMicro.config.environment.systemPackages == [ ])
+  "disabled NixOS unexpectedly selected the codex-micro package";
 assert lib.assertMsg
   ((homePackage legacyRemoteConfig).drvPath == packages.codex-desktop-remote-mobile-control.drvPath)
   "the Home Manager remoteMobileControl shorthand changed";

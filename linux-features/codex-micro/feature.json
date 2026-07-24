@@ -1,0 +1,30 @@
+{
+  "id": "codex-micro",
+  "title": "Codex Micro hardware support",
+  "description": "Adds the verified Linux node-hid binding and narrow USB-C/Bluetooth udev policy needed by the upstream Work Louder Codex Micro service.",
+  "defaultEnabled": false,
+  "entrypoints": {
+    "patchDescriptors": "./patch.js"
+  },
+  "resources": [
+    {
+      "source": "resources/70-codex-micro.rules",
+      "target": ".codex-linux/features/codex-micro/70-codex-micro.rules",
+      "mode": "0644"
+    }
+  ],
+  "packageDependencies": {
+    "deb": [
+      "libudev1",
+      "libusb-1.0-0"
+    ],
+    "rpm": [
+      "libudev.so.1%{codex_elf_suffix}",
+      "libusb-1.0.so.0%{codex_elf_suffix}"
+    ],
+    "pacman": [
+      "systemd-libs",
+      "libusb"
+    ]
+  }
+}
