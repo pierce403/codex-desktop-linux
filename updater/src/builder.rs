@@ -129,6 +129,7 @@ pub async fn build_update_from(
 
     state.status = UpdateStatus::PatchingApp;
     state.save(&paths.state_file)?;
+    let feature_config = crate::config::effective_feature_config_path(config);
     let mut install = Command::new(workspace.bundle_dir.join("install.sh"));
     install
         .arg(dmg_path)
@@ -149,9 +150,11 @@ pub async fn build_update_from(
     // writes it to a stable per-user path) so the rebuild stages exactly those
     // features. Only set it when the file actually exists; an absent path would
     // make linux-features.js see an empty enabled set and stage nothing.
-    if let Some(feature_config) = crate::config::effective_feature_config_path(config) {
-        install.env("CODEX_LINUX_FEATURES_CONFIG", &feature_config);
-    }
+    install.envs(
+        feature_config
+            .iter()
+            .map(|path| ("CODEX_LINUX_FEATURES_CONFIG", path)),
+    );
     run_and_log(&mut install, &workspace.install_log)
         .await
         .context("install.sh failed during local rebuild")?;
@@ -171,6 +174,11 @@ pub async fn build_update_from(
                 workspace
                     .bundle_dir
                     .join("packaging/linux/codex-update-manager.service"),
+            )
+            .envs(
+                feature_config
+                    .iter()
+                    .map(|path| ("CODEX_LINUX_FEATURES_CONFIG", path)),
             )
             .env("PATH", &build_path)
             .current_dir(&workspace.bundle_dir),
@@ -779,6 +787,7 @@ esac
                 r#"set -euo pipefail
 mkdir -p "${DIST_DIR_OVERRIDE}"
 cp .codex-linux/source-info.json "${DIST_DIR_OVERRIDE}/package-source-info.json"
+printf '%s\n' "${CODEX_LINUX_FEATURES_CONFIG:-}" > "${DIST_DIR_OVERRIDE}/package-feature-config.txt"
 touch "${DIST_DIR_OVERRIDE}/codex-desktop_${PACKAGE_VERSION}_amd64.deb"
 "#
             }
@@ -786,6 +795,7 @@ touch "${DIST_DIR_OVERRIDE}/codex-desktop_${PACKAGE_VERSION}_amd64.deb"
                 r#"set -euo pipefail
 mkdir -p "${DIST_DIR_OVERRIDE}"
 cp .codex-linux/source-info.json "${DIST_DIR_OVERRIDE}/package-source-info.json"
+printf '%s\n' "${CODEX_LINUX_FEATURES_CONFIG:-}" > "${DIST_DIR_OVERRIDE}/package-feature-config.txt"
 touch "${DIST_DIR_OVERRIDE}/codex-desktop-${PACKAGE_VERSION}.x86_64.rpm"
 "#
             }
@@ -794,6 +804,7 @@ touch "${DIST_DIR_OVERRIDE}/codex-desktop-${PACKAGE_VERSION}.x86_64.rpm"
 VER="${PACKAGE_VERSION%%+*}"
 mkdir -p "${DIST_DIR_OVERRIDE}"
 cp .codex-linux/source-info.json "${DIST_DIR_OVERRIDE}/package-source-info.json"
+printf '%s\n' "${CODEX_LINUX_FEATURES_CONFIG:-}" > "${DIST_DIR_OVERRIDE}/package-feature-config.txt"
 touch "${DIST_DIR_OVERRIDE}/codex-desktop-${VER}-1-x86_64.pkg.tar.zst"
 "#
             }
@@ -939,6 +950,8 @@ touch "${DIST_DIR_OVERRIDE}/codex-desktop-${VER}-1-x86_64.pkg.tar.zst"
         fs::create_dir_all(bundle_root.join("assets"))?;
         write_fake_computer_use_bundle(&bundle_root)?;
         write_fake_linux_features_bundle(&bundle_root)?;
+        let feature_config = bundle_root.join("linux-features/features.json");
+        fs::write(&feature_config, b"{\"enabled\":[\"example-feature\"]}\n")?;
         write_fake_patch_bundle(&bundle_root)?;
         fs::write(bundle_root.join("CHANGELOG.md"), b"# Changelog\n")?;
         fs::write(
@@ -1006,6 +1019,7 @@ touch "${DIST_DIR_OVERRIDE}/codex-desktop-${VER}-1-x86_64.pkg.tar.zst"
 mkdir -p "${CODEX_INSTALL_DIR}"
 echo launcher > "${CODEX_INSTALL_DIR}/start.sh"
 chmod +x "${CODEX_INSTALL_DIR}/start.sh"
+printf '%s\n' "${CODEX_LINUX_FEATURES_CONFIG:-}" > "${CODEX_INSTALL_DIR}/install-feature-config.txt"
 cp .codex-linux/source-info.json "${CODEX_INSTALL_DIR}/app-source-info.json"
 if [ -n "${CODEX_PATCH_REPORT_JSON:-}" ]; then
   mkdir -p "$(dirname "$CODEX_PATCH_REPORT_JSON")"
@@ -1101,6 +1115,23 @@ fi
         assert_eq!(state.status, UpdateStatus::ReadyToInstall);
         assert!(artifacts.workspace_dir.exists());
         assert!(artifacts.package_path.exists());
+        let expected_feature_config = format!("{}\n", feature_config.display());
+        assert_eq!(
+            fs::read_to_string(
+                artifacts
+                    .workspace_dir
+                    .join("codex-app/install-feature-config.txt")
+            )?,
+            expected_feature_config
+        );
+        assert_eq!(
+            fs::read_to_string(
+                artifacts
+                    .workspace_dir
+                    .join("dist/package-feature-config.txt")
+            )?,
+            expected_feature_config
+        );
         assert!(artifacts
             .workspace_dir
             .join("builder/scripts/rebuild-candidate.sh")
