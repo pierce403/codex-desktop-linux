@@ -587,12 +587,11 @@ test("Linux feature package resources reject ancestor and descendant target over
     id: "package-framework-fixture",
     title: "Package Framework Fixture",
     packageResources: [
-      { source: "tree", target: "usr/share/package-framework-fixture", mode: "0644", formats: ["deb"] },
+      { source: "parent.txt", target: "usr/share/package-framework-fixture", mode: "0644", formats: ["deb"] },
       { source: "child.txt", target: "usr/share/package-framework-fixture/child.txt", mode: "0644", formats: ["deb"] },
     ],
   });
-  fs.mkdirSync(path.join(featureDir, "tree"));
-  fs.writeFileSync(path.join(featureDir, "tree", "payload.txt"), "tree\n");
+  fs.writeFileSync(path.join(featureDir, "parent.txt"), "parent\n");
   fs.writeFileSync(path.join(featureDir, "child.txt"), "child\n");
 
   assert.throws(
@@ -627,6 +626,57 @@ test("Linux feature package resources cannot target the packaged app directory",
     /must stay outside the packaged app directory/i,
   );
   assert.equal(fs.existsSync(path.join(appDir, "feature-owned.txt")), false);
+});
+
+test("Linux feature package resources cannot target an ancestor of the packaged app directory", (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "codex-feature-package-app-ancestor-target-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const { featureDir, featuresRoot, id } = makePackageFeatureRoot(root, {
+    packageResources: [
+      {
+        source: "payload.txt",
+        target: "opt",
+        mode: "0644",
+        formats: ["deb"],
+      },
+    ],
+  });
+  fs.writeFileSync(path.join(featureDir, "payload.txt"), "payload\n");
+  const packageRoot = path.join(root, "package-root");
+  const appDir = path.join(packageRoot, "opt", "codex-desktop");
+  const buildInfoPath = writeBuildInfoSnapshot(appDir, [id]);
+
+  assert.throws(
+    () => stageEnabledLinuxFeaturePackageResources(
+      packageRoot,
+      { appDir, featuresRoot, packageFormat: "deb" },
+    ),
+    /must stay outside the packaged app directory/i,
+  );
+  assert.equal(fs.existsSync(buildInfoPath), true);
+});
+
+test("Linux feature package resources must use regular file sources", (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "codex-feature-package-source-type-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+
+  const { featureDir, featuresRoot } = makePackageFeatureRoot(root, {
+    packageResources: [
+      {
+        source: "payload",
+        target: "usr/share/codex-package-framework/payload",
+        mode: "0644",
+        formats: ["deb"],
+      },
+    ],
+  });
+  fs.mkdirSync(path.join(featureDir, "payload"));
+  fs.writeFileSync(path.join(featureDir, "payload", "nested.txt"), "nested\n");
+
+  assert.throws(
+    () => enabledLinuxFeaturePackagePlan({ featuresRoot, packageFormat: "deb" }),
+    /source must be a regular file/i,
+  );
 });
 
 test("Linux feature package staging rejects symlinked resource sources", (t) => {
@@ -702,26 +752,26 @@ test("Linux feature package staging rejects symlinked target parents", (t) => {
   assert.equal(fs.existsSync(path.join(outside, "fixture.txt")), false);
 });
 
-test("Linux feature package permission restoration rejects nested symlinks", (t) => {
+test("Linux feature package permission restoration rejects symlinked targets", (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "codex-feature-package-restore-link-"));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
 
   const outside = path.join(root, "outside.txt");
   const packageRoot = path.join(root, "package-root");
-  const target = "usr/share/codex-package-framework/tree";
+  const target = "usr/share/codex-package-framework/payload.txt";
   const { featureDir, featuresRoot } = makePackageFeatureRoot(root, {
     packageResources: [
-      { source: "tree", target, mode: "0640", formats: ["deb"] },
+      { source: "payload.txt", target, mode: "0640", formats: ["deb"] },
     ],
   });
-  fs.mkdirSync(path.join(featureDir, "tree"));
-  fs.writeFileSync(path.join(featureDir, "tree", "payload.txt"), "payload\n");
+  fs.writeFileSync(path.join(featureDir, "payload.txt"), "payload\n");
   fs.writeFileSync(outside, "outside\n");
   fs.chmodSync(outside, 0o600);
 
   const options = { featuresRoot, packageFormat: "deb" };
   stageEnabledLinuxFeaturePackageResources(packageRoot, options);
-  fs.symlinkSync(outside, path.join(packageRoot, target, "injected-link"));
+  fs.rmSync(path.join(packageRoot, target));
+  fs.symlinkSync(outside, path.join(packageRoot, target));
 
   assert.throws(
     () => restoreEnabledLinuxFeaturePackageResourcePermissions(packageRoot, options),
@@ -749,6 +799,33 @@ test("Linux feature package resources reject invalid modes and formats", () => {
         formats: ["deb"],
       },
       error: /file mode must be a quoted octal string/i,
+    },
+    {
+      resource: {
+        source: "payload.txt",
+        target: "usr/share/codex-package-framework/payload.txt",
+        mode: "4755",
+        formats: ["deb"],
+      },
+      error: /special permission bits are not allowed/i,
+    },
+    {
+      resource: {
+        source: "payload.txt",
+        target: "usr/share/codex-package-framework/payload.txt",
+        mode: "2755",
+        formats: ["deb"],
+      },
+      error: /special permission bits are not allowed/i,
+    },
+    {
+      resource: {
+        source: "payload.txt",
+        target: "usr/share/codex-package-framework/payload.txt",
+        mode: "1777",
+        formats: ["deb"],
+      },
+      error: /special permission bits are not allowed/i,
     },
     {
       resource: {
@@ -880,6 +957,57 @@ test("native package plans require the app feature snapshot to match the current
   );
 });
 
+test("native package plans strictly validate the current feature config", (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "codex-feature-package-config-validation-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const { featuresRoot } = makePackageFeatureRoot(root, {});
+  const appDir = path.join(root, "app");
+  writeBuildInfoSnapshot(appDir, []);
+  const configPath = path.join(featuresRoot, "features.json");
+  const options = { appDir, featuresRoot, packageFormat: "deb" };
+
+  fs.writeFileSync(configPath, '{"enabled":[]}\n');
+  assert.deepEqual(enabledLinuxFeaturePackagePlan(options), {
+    resources: [],
+    dependencies: [],
+  });
+
+  fs.writeFileSync(configPath, '{"enabled":[}\n');
+  assert.throws(
+    () => enabledLinuxFeaturePackagePlan(options),
+    /could not read Linux features config/i,
+  );
+
+  fs.writeFileSync(configPath, '{"enabled":"package-framework-fixture"}\n');
+  assert.throws(
+    () => enabledLinuxFeaturePackagePlan(options),
+    /must contain an enabled array/i,
+  );
+
+  fs.writeFileSync(configPath, '{"enabled":["INVALID"]}\n');
+  assert.throws(
+    () => enabledLinuxFeaturePackagePlan(options),
+    /invalid Linux feature id/i,
+  );
+
+  fs.writeFileSync(
+    configPath,
+    '{"enabled":["package-framework-fixture","package-framework-fixture"]}\n',
+  );
+  assert.throws(
+    () => enabledLinuxFeaturePackagePlan(options),
+    /duplicate Linux feature id/i,
+  );
+
+  fs.rmSync(configPath);
+  assert.throws(
+    () => enabledLinuxFeaturePackagePlan(
+      { ...options, featuresConfigPath: configPath },
+    ),
+    /could not read Linux features config.*file does not exist/i,
+  );
+});
+
 test("native package plans reject missing or malformed app feature snapshots", (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "codex-feature-package-build-info-"));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
@@ -903,5 +1031,13 @@ test("native package plans reject missing or malformed app feature snapshots", (
   assert.throws(
     () => enabledLinuxFeaturePackagePlan({ appDir, featuresRoot, packageFormat: "deb" }),
     /must match/i,
+  );
+  writeBuildInfoSnapshot(appDir, [
+    "package-framework-fixture",
+    "package-framework-fixture",
+  ]);
+  assert.throws(
+    () => enabledFeatureIdsFromBuildInfo(appDir),
+    /duplicate Linux feature id/i,
   );
 });

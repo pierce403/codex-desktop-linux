@@ -193,18 +193,22 @@ install, package, and updater rebuilds may run outside the real user's session.
 
 ## Declarative Native Package Staging
 
-`packageResources` copies feature-owned files outside the app directory into
-`.deb`, RPM, or pacman payloads. Each entry uses `source`, `target`, `mode`, and
-an optional `formats` list. Sources must remain inside the feature directory,
-targets must remain inside the package root, and modes use quoted octal strings.
+`packageResources` copies feature-owned regular files outside the app directory
+into `.deb`, RPM, or pacman payloads. Each entry uses `source`, `target`, `mode`,
+and an optional `formats` list. Sources must remain inside the feature directory.
+Targets must remain inside the package root and must not be the packaged app
+directory, one of its descendants, or one of its ancestors. Modes use quoted
+octal strings and cannot set setuid, setgid, or sticky bits.
 
 `packageDependencies` maps each native package format to its additional runtime
 dependencies. Resources and dependencies are validated and included only when
 their feature is enabled.
 
 Native package builders require the current feature config to match
-`.codex-linux/build-info.json` in the staged app. A missing, malformed, or
-mismatched `linuxFeatures.enabled` snapshot stops packaging so resources and
+`.codex-linux/build-info.json` in the staged app. Packaging strictly validates
+the current `enabled` array, so malformed JSON, a non-array value, or an invalid
+feature id stops the build. A missing, malformed, or mismatched
+`linuxFeatures.enabled` snapshot also stops packaging so resources and
 dependencies cannot diverge from the app that was actually built. Rebuild the
 app after changing the enabled feature set.
 

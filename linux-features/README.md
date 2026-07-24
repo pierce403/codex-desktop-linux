@@ -127,12 +127,14 @@ or other user-home artifact, stage the source with `resources` and copy it from
 Avoid writing user-home files from `stage.sh`, because install/package/update
 rebuilds may run outside the real user's session.
 
-`packageResources` stage feature-owned files outside the app directory for
-native packages. `packageDependencies` adds per-format runtime dependencies.
-Both apply only while their feature is enabled; see the architecture document
-for the field contract. Native package builds also require the enabled set to
-match the staged app's `.codex-linux/build-info.json`; rebuild the app after
-changing the feature config.
+`packageResources` stage feature-owned regular files outside the app directory
+for native packages. Their targets cannot overlap the packaged app directory,
+and their quoted octal modes cannot include special permission bits.
+`packageDependencies` adds per-format runtime dependencies. Both apply only
+while their feature is enabled; see the architecture document for the field
+contract. Native package builds also strictly validate the current enabled set
+and require it to match the staged app's `.codex-linux/build-info.json`; rebuild
+the app after changing the feature config.
 
 `packageHooks` run after declarative native package resources are staged and
 receive `PACKAGE_FORMAT`,

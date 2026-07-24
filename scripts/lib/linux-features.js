@@ -66,10 +66,13 @@ function linuxFeaturesConfigPath(featuresRoot, options = {}) {
   return path.join(featuresRoot, "features.example.json");
 }
 
-function readJsonFile(filePath, label) {
+function readJsonFile(filePath, label, options = {}) {
   try {
     return JSON.parse(fs.readFileSync(filePath, "utf8"));
   } catch (error) {
+    if (options.strict === true) {
+      throw new Error(`Could not read ${label} at ${filePath}: ${error.message}`);
+    }
     console.warn(`WARN: Could not read ${label} at ${filePath}: ${error.message}`);
     return null;
   }
@@ -78,15 +81,25 @@ function readJsonFile(filePath, label) {
 function readLinuxFeaturesConfig(options = {}) {
   const featuresRoot = linuxFeaturesRoot(options);
   const configPath = linuxFeaturesConfigPath(featuresRoot, options);
+  const strict = options.strictConfig === true;
   if (!fs.existsSync(configPath)) {
+    if (strict) {
+      throw new Error(`Could not read Linux features config at ${configPath}: file does not exist`);
+    }
     return { config: null, configPath };
   }
 
-  const config = readJsonFile(configPath, "Linux features config");
+  const config = readJsonFile(configPath, "Linux features config", { strict });
   if (config == null) {
+    if (strict) {
+      throw new Error(`Linux features config ${configPath} must be a JSON object`);
+    }
     return { config: null, configPath };
   }
   if (typeof config !== "object" || Array.isArray(config)) {
+    if (strict) {
+      throw new Error(`Linux features config ${configPath} must be a JSON object`);
+    }
     console.warn(`WARN: Linux features config ${configPath} must be a JSON object`);
     return { config: null, configPath };
   }
@@ -119,8 +132,11 @@ function normalizeFeatureIdList(value, label, featureId) {
   return result;
 }
 
-function normalizeEnabledFeatureIds(value, sourcePath) {
+function normalizeEnabledFeatureIds(value, sourcePath, options = {}) {
   if (!Array.isArray(value)) {
+    if (options.strict === true) {
+      throw new Error(`Linux features config ${sourcePath} must contain an enabled array`);
+    }
     console.warn(`WARN: Linux features config ${sourcePath} must contain an enabled array`);
     return [];
   }
@@ -129,11 +145,17 @@ function normalizeEnabledFeatureIds(value, sourcePath) {
   const ids = [];
   for (const item of value) {
     if (typeof item !== "string" || !FEATURE_ID_PATTERN.test(item)) {
+      if (options.strict === true) {
+        throw new Error(`Invalid Linux feature id in ${sourcePath}: ${String(item)}`);
+      }
       console.warn(`WARN: Invalid Linux feature id in ${sourcePath}: ${String(item)}`);
       continue;
     }
     const id = LEGACY_FEATURE_ID_ALIASES.get(item) ?? item;
     if (seen.has(id)) {
+      if (options.strict === true) {
+        throw new Error(`Duplicate Linux feature id in ${sourcePath}: ${item}`);
+      }
       continue;
     }
     seen.add(id);
@@ -162,10 +184,11 @@ function enabledFeatureIdsFromBuildInfo(appDir) {
   const ids = [];
   for (const rawId of enabled) {
     const id = assertFeatureId(rawId, `Linux feature id in ${buildInfoPath}`);
-    if (!seen.has(id)) {
-      seen.add(id);
-      ids.push(id);
+    if (seen.has(id)) {
+      throw new Error(`Duplicate Linux feature id in ${buildInfoPath}: ${rawId}`);
     }
+    seen.add(id);
+    ids.push(id);
   }
   return ids;
 }
@@ -201,7 +224,11 @@ function linuxFeaturesConfig(options = {}) {
     return { enabled: [], settings: {}, configPath };
   }
   return {
-    enabled: normalizeEnabledFeatureIds(config.enabled, configPath),
+    enabled: normalizeEnabledFeatureIds(
+      config.enabled,
+      configPath,
+      { strict: options.strictConfig === true },
+    ),
     settings: normalizeLinuxFeatureSettings(config.settings, configPath),
     configPath,
   };
@@ -369,7 +396,8 @@ function loadEnabledLinuxFeatures(options = {}) {
 
 function packageFeatureOptions(appDir, options = {}) {
   const snapshotEnabled = enabledFeatureIdsFromBuildInfo(appDir);
-  const configuredEnabled = enabledLinuxFeatureIds(options);
+  const strictOptions = { ...options, strictConfig: true };
+  const configuredEnabled = enabledLinuxFeatureIds(strictOptions);
   if (
     snapshotEnabled.length !== configuredEnabled.length
     || snapshotEnabled.some((id, index) => id !== configuredEnabled[index])
@@ -384,7 +412,7 @@ function packageFeatureOptions(appDir, options = {}) {
     );
   }
   return {
-    ...options,
+    ...strictOptions,
     enabledFeatureIds: snapshotEnabled,
   };
 }
@@ -618,6 +646,16 @@ function parseFileMode(value, fallback) {
     throw new Error(`Invalid file mode: ${String(value)}; file mode must be a quoted octal string`);
   }
   return Number.parseInt(raw, 8);
+}
+
+function parsePackageResourceMode(value) {
+  const mode = parseFileMode(value, 0o644);
+  if ((mode & 0o7000) !== 0) {
+    throw new Error(
+      `Invalid package resource file mode: ${String(value)}; special permission bits are not allowed`,
+    );
+  }
+  return mode;
 }
 
 function modeString(mode) {
@@ -1102,6 +1140,11 @@ function enabledLinuxFeaturePackagePlan(options = {}) {
         source,
         `Linux feature '${feature.id}' package resource ${index + 1}`,
       );
+      if (!fs.lstatSync(source).isFile()) {
+        throw new Error(
+          `Linux feature '${feature.id}' package resource ${index + 1} source must be a regular file`,
+        );
+      }
       const target = normalizePackageTarget(entry.target, feature.id);
       const formats = normalizePackageFormats(entry.formats, feature.id, `package resource ${index + 1}`);
       if (formats.length > 0 && !formats.includes(packageFormat)) {
@@ -1141,7 +1184,7 @@ function enabledLinuxFeaturePackagePlan(options = {}) {
         id: feature.id,
         source,
         target,
-        mode: parseFileMode(entry.mode, 0o644),
+        mode: parsePackageResourceMode(entry.mode),
         formats,
         index,
       });
@@ -1179,6 +1222,7 @@ function assertPackageResourcesOutsideApp(packageRoot, appDir, plan) {
     if (
       resource.target === appRelative
       || resource.target.startsWith(`${appRelative}/`)
+      || appRelative.startsWith(`${resource.target}/`)
     ) {
       throw new Error(
         `Linux feature package resource target must stay outside the packaged app directory: ${resource.target}`,
